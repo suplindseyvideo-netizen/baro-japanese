@@ -389,6 +389,7 @@ app.addEventListener('click', (event) => {
   if (target.dataset.action === 'back') return back();
   if (target.dataset.place) return choosePlace(target.dataset.place);
   if (target.dataset.template) return chooseTemplate(target.dataset.template);
+  if (target.dataset.view === 'shopping') return showShopping();
   if (target.dataset.view) return showSaved(target.dataset.view);
   if (target.dataset.slot) {
     state.selected[target.dataset.slot] = { ko: target.dataset.ko, ja: target.dataset.ja, pron: target.dataset.pron };
@@ -396,7 +397,6 @@ app.addEventListener('click', (event) => {
   }
   if (target.dataset.action === 'result') return showResult();
   if (target.dataset.action === 'big') return showBig();
-  if (target.dataset.view === 'shopping') return showShopping();
   if (target.dataset.action === 'search') return doSearch(state.searchQuery);
   if (target.dataset.action === 'add-shop' && state.searchResult) return addToShoppingList(state.searchResult);
   if (target.dataset.phraseIdx != null && state.searchResult) {
