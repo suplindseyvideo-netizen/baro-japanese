@@ -7,7 +7,11 @@ const state = {
   selected: {},
   view: 'home',
   recent: loadStore('recentPhrases', []),
-  favorites: loadStore('favoritePhrases', [])
+  favorites: loadStore('favoritePhrases', []),
+  shoppingList: loadStore('shoppingList', []),
+  searchQuery: '',
+  searchResult: null,
+  searchLoading: false
 };
 
 function loadStore(key, fallback) {
@@ -54,6 +58,60 @@ function toggleFavorite(phrase) {
 }
 function isFavorite(phrase) { return state.favorites.some(p => phraseKey(p) === phraseKey(phrase)); }
 
+// ── 쇼핑 검색 ──────────────────────────────────────────────
+async function translateToJapanese(text) {
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ko|ja`;
+  const res = await fetch(url);
+  const json = await res.json();
+  return json.responseData?.translatedText || null;
+}
+
+const SHOPPING_PHRASES = [
+  { ko: '어디 있어요?', ja: '{item}はどこにありますか？', pron: '{item} 와 도코니 아리마스카' },
+  { ko: '이거 있어요?', ja: '{item}はありますか？', pron: '{item} 와 아리마스카' },
+  { ko: '이거 주세요.', ja: '{item}をください。', pron: '{item} 오 쿠다사이' },
+  { ko: '다른 색상 있어요?', ja: '{item}の他の色はありますか？', pron: '{item} 노 호카노 이로와 아리마스카' },
+];
+
+async function doSearch(query) {
+  if (!query.trim()) return;
+  state.searchLoading = true;
+  state.searchResult = null;
+  render();
+  try {
+    const ja = await translateToJapanese(query);
+    if (ja) {
+      state.searchResult = { ko: query, ja, pron: '' };
+    }
+  } catch (e) {
+    toast('번역에 실패했어. 인터넷 연결을 확인해줘.');
+  }
+  state.searchLoading = false;
+  render();
+}
+
+function addToShoppingList(item) {
+  const exists = state.shoppingList.some(s => s.ja === item.ja);
+  if (exists) return toast('이미 목록에 있어!');
+  state.shoppingList = [{ ...item, done: false, id: Date.now() }, ...state.shoppingList];
+  saveStore('shoppingList', state.shoppingList);
+  toast('쇼핑 목록에 추가했어 ✓');
+  render();
+}
+
+function toggleShopDone(id) {
+  state.shoppingList = state.shoppingList.map(s => s.id === id ? { ...s, done: !s.done } : s);
+  saveStore('shoppingList', state.shoppingList);
+  render();
+}
+
+function removeShopItem(id) {
+  state.shoppingList = state.shoppingList.filter(s => s.id !== id);
+  saveStore('shoppingList', state.shoppingList);
+  render();
+}
+// ───────────────────────────────────────────────────────────
+
 function goHome() {
   state.view = 'home'; state.placeId = null; state.templateId = null; state.selected = {}; render();
 }
@@ -70,11 +128,12 @@ function showResult() {
 }
 function showBig() { state.view = 'big'; render(); }
 function showSaved(kind) { state.view = kind; render(); }
+function showShopping() { state.view = 'shopping'; render(); }
 function back() {
   if (state.view === 'big') state.view = 'result';
   else if (state.view === 'result') state.view = 'builder';
   else if (state.view === 'builder') state.view = 'place';
-  else if (state.view === 'place' || state.view === 'recent' || state.view === 'favorites') goHome();
+  else if (state.view === 'place' || state.view === 'recent' || state.view === 'favorites' || state.view === 'shopping') goHome();
   render();
 }
 
@@ -131,6 +190,9 @@ function renderHome() {
     <section class="quick-row">
       <button class="secondary" data-view="favorites">⭐ 즐겨찾기 ${state.favorites.length}</button>
       <button class="secondary" data-view="recent">🕘 최근 사용 ${state.recent.length}</button>
+    </section>
+    <section class="quick-row" style="margin-top:10px">
+      <button class="primary" data-view="shopping" style="grid-column:1/-1">🛒 쇼핑 목록 검색 ${state.shoppingList.length ? '· ' + state.shoppingList.length + '개' : ''}</button>
     </section>
   `, { back: false });
 }
@@ -244,6 +306,64 @@ function renderSaved(kind) {
   `, { title: kind === 'favorites' ? '즐겨찾기' : '최근 사용', subtitle: '자주 쓰는 문장' });
 }
 
+function renderShopping() {
+  const r = state.searchResult;
+  return shell(`
+    <section class="search-box">
+      <h2>🛒 쇼핑 검색</h2>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 14px">한국어로 상품명을 입력하면 일본어로 보여줄게.<br>예: 키스미 아이라이너, 카네보 파운데이션</p>
+      <div class="search-row">
+        <input class="search-input" id="shopSearch" type="text" placeholder="상품명 입력..." value="${state.searchQuery}" />
+        <button class="search-btn" data-action="search">검색</button>
+      </div>
+    </section>
+
+    ${state.searchLoading ? `<div class="search-spinner">번역 중...</div>` : ''}
+
+    ${r ? `
+      <section class="search-result">
+        <small>검색 결과</small>
+        <div class="ja-big">${r.ja}</div>
+        <div class="pron">${r.ko}</div>
+        <button class="primary" data-action="add-shop" style="margin-bottom:14px">+ 쇼핑 목록에 추가</button>
+        <div style="font-size:13px;font-weight:800;color:var(--muted);margin-bottom:8px">직원에게 쓸 수 있는 문장</div>
+        <div class="phrase-list">
+          ${SHOPPING_PHRASES.map((p, i) => `
+            <div class="phrase-row" data-phrase-idx="${i}">
+              <strong>${p.ja.replace('{item}', r.ja)}</strong>
+              <small>${p.ko}</small>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    ` : ''}
+
+    <section>
+      <div style="font-size:16px;font-weight:800;letter-spacing:-0.04em;margin:18px 0 12px">
+        쇼핑 목록 ${state.shoppingList.length ? `<span style="color:var(--brand)">${state.shoppingList.length}개</span>` : ''}
+      </div>
+      ${state.shoppingList.length ? `
+        <div class="shopping-list">
+          ${state.shoppingList.map(item => `
+            <div class="shop-item-card ${item.done ? 'check-done' : ''}">
+              <div class="item-info">
+                <div class="item-ja">${item.ja}</div>
+                <div class="item-ko">${item.ko}</div>
+              </div>
+              <div class="item-actions">
+                <button class="icon-sm" data-shop-speak="${item.id}" title="읽기">🔊</button>
+                <button class="icon-sm" data-shop-copy="${item.id}" title="복사">📋</button>
+                <button class="icon-sm" data-shop-done="${item.id}" title="완료">${item.done ? '↩️' : '✓'}</button>
+                <button class="icon-sm" data-shop-del="${item.id}" title="삭제">🗑</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : `<div class="empty">검색 후 목록에 추가해봐.<br>찾은 상품을 여기에 모아둘 수 있어.</div>`}
+    </section>
+  `, { title: '쇼핑 검색', subtitle: '상품명을 일본어로 바꿔줘' });
+}
+
 function render() {
   const html = state.view === 'home' ? renderHome()
     : state.view === 'place' ? renderPlace()
@@ -251,8 +371,16 @@ function render() {
     : state.view === 'result' ? renderResult()
     : state.view === 'big' ? renderBig()
     : state.view === 'favorites' ? renderSaved('favorites')
+    : state.view === 'shopping' ? renderShopping()
     : renderSaved('recent');
   app.innerHTML = html;
+  if (state.view === 'shopping') {
+    const input = document.querySelector('#shopSearch');
+    if (input) {
+      input.addEventListener('input', e => { state.searchQuery = e.target.value; });
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(state.searchQuery); });
+    }
+  }
 }
 
 app.addEventListener('click', (event) => {
@@ -268,6 +396,24 @@ app.addEventListener('click', (event) => {
   }
   if (target.dataset.action === 'result') return showResult();
   if (target.dataset.action === 'big') return showBig();
+  if (target.dataset.view === 'shopping') return showShopping();
+  if (target.dataset.action === 'search') return doSearch(state.searchQuery);
+  if (target.dataset.action === 'add-shop' && state.searchResult) return addToShoppingList(state.searchResult);
+  if (target.dataset.phraseIdx != null && state.searchResult) {
+    const p = SHOPPING_PHRASES[Number(target.dataset.phraseIdx)];
+    const ja = p.ja.replace('{item}', state.searchResult.ja);
+    return speakJapanese(ja);
+  }
+  if (target.dataset.shopDone) return toggleShopDone(Number(target.dataset.shopDone));
+  if (target.dataset.shopDel) return removeShopItem(Number(target.dataset.shopDel));
+  if (target.dataset.shopSpeak) {
+    const item = state.shoppingList.find(s => s.id === Number(target.dataset.shopSpeak));
+    if (item) return speakJapanese(item.ja);
+  }
+  if (target.dataset.shopCopy) {
+    const item = state.shoppingList.find(s => s.id === Number(target.dataset.shopCopy));
+    if (item) return copyText(item.ja);
+  }
   if (target.dataset.copyText) return copyText(decodeURIComponent(target.dataset.copyText));
   if (target.dataset.speakText) return speakJapanese(decodeURIComponent(target.dataset.speakText));
   if (target.hasAttribute('data-favorite-current')) return toggleFavorite({ ...fillTemplate(selectedTemplate()), place: selectedPlace().ko, title: selectedTemplate().title });
